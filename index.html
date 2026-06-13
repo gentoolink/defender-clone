@@ -51,7 +51,8 @@
       <div class="arcade-font text-[8px] text-zinc-400 leading-relaxed">
         <span class="text-amber-400">ARROWS</span> / <span class="text-amber-400">MOUSE</span> — THRUST<br>
         <span class="text-amber-400">SPACE</span> / <span class="text-amber-400">CLICK</span> — FIRE<br>
-        <span class="text-amber-400">SHIFT</span> / <span class="text-amber-400">R-CLICK</span> — SHIELD
+        <span class="text-amber-400">SHIFT</span> / <span class="text-amber-400">R-CLICK</span> — SHIELD<br>
+        <span class="text-amber-400">B</span> — SMART BOMB
       </div>
       <div class="flex gap-3 items-center">
         <div class="w-4 h-4 rounded-full bg-red-600 shadow-[0_0_8px_#dc2626] border-2 border-red-900"></div>
@@ -78,7 +79,7 @@
   const FIRE_COOLDOWN = 0.09;     // rapid fire interval (s)
   const LASER_SPEED = 1400;
   const LASER_LEN = 70;
-  const ENEMY_COUNT = 8;
+  const ENEMY_COUNT = 10;
 
   const CRASH_SPEED = 300;        // hitting terrain faster than this is fatal
   const ENEMY_DPS = 40;           // hull damage per second of enemy contact
@@ -88,6 +89,17 @@
   const START_LIVES = 3;
   const EXTRA_LIFE_EVERY = 10000;
   const RESPAWN_INVULN = 2.5;     // post-respawn grace period (s)
+
+  // New for improved gameplay
+  const NUM_HUMANS = 10;
+  const SMART_BOMBS_START = 3;
+  const BAITER_SCORE_THRESHOLD = 3500;
+  const HUMAN_R = 5;
+  const LANDER_GRAB_R = 26;
+  const FALL_SPEED = 210;
+  const RESCUE_SCORE = 850;
+  const SMART_BOMB_R = 170;
+  const BAITER_SPEED = 135;
 
   // Radar box (centered top)
   const RADAR_W = 360, RADAR_H = 64;
@@ -146,30 +158,162 @@
   let score = 0;
   let fireTimer = 0;
 
-  function spawnEnemy(awayFromShip) {
+  // New state for depth and challenge
+  let humans = [];
+  let scorePopups = [];     // floating +pts labels
+  let smartBombs = SMART_BOMBS_START;
+  let wave = 1;
+  let humansRescued = 0;
+  let shake = 0;            // screen shake intensity
+  let baiterNextScore = BAITER_SCORE_THRESHOLD;
+  let audioCtx = null;
+  let enemyShots = [];      // enemy projectiles {x,y,dir,vx,vy,life}
+  let highScore = parseInt(localStorage.getItem('spaceDefenderHi') || '0');
+
+  function spawnEnemy(awayFromShip, type = 'lander') {
     let x = rand(0, WORLD_W);
     if (awayFromShip) {
-      // keep new spawns off-screen
       while (Math.abs(wrapDelta(ship.x, x)) < CW * 0.6) x = rand(0, WORLD_W);
     }
+    const y = rand(70 + RADAR_H, CH - 190);
+    if (type === 'baiter') {
+      return {
+        type: 'baiter',
+        x, y,
+        vx: rand(-BAITER_SPEED, BAITER_SPEED),
+        vy: rand(-BAITER_SPEED * 0.6, BAITER_SPEED * 0.6),
+        alive: true,
+        shootTimer: rand(0.6, 1.4)
+      };
+    }
+    // lander (default)
     return {
-      x,
-      y: rand(60 + RADAR_H, CH - 180),
-      baseY: 0,
-      vx: rand(-40, 40),
+      type: 'lander',
+      x, y,
+      baseY: y,
+      vx: rand(-38, 38),
       phase: rand(0, Math.PI * 2),
-      alive: true
+      alive: true,
+      carrying: null,   // human ref if carrying one
+      shootTimer: rand(1.2, 2.8)
     };
   }
+
+  function spawnBaiter(awayFromShip) {
+    return spawnEnemy(awayFromShip, 'baiter');
+  }
+
+  function spawnHuman() {
+    let x = rand(40, WORLD_W - 40);
+    // place on terrain
+    const y = terrainY(x) - 4;
+    return { x, y, alive: true, falling: false, vy: 0 };
+  }
+
   for (let i = 0; i < ENEMY_COUNT; i++) enemies.push(spawnEnemy(false));
-  enemies.forEach(e => e.baseY = e.y);
+  enemies.forEach(e => { if (!e.type) e.type = 'lander'; if (e.baseY === undefined) e.baseY = e.y; });
+  for (let i = 0; i < NUM_HUMANS; i++) humans.push(spawnHuman());
 
   // ---------- INPUT ----------
+  function ensureAudio() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    } else if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  }
+  function playSound(type) {
+    if (!audioCtx) return;
+    try {
+      const t = audioCtx.currentTime;
+      if (type === 'laser') {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        const f = audioCtx.createBiquadFilter();
+        o.type = 'sawtooth'; o.frequency.value = 980;
+        f.type = 'lowpass'; f.frequency.value = 1800;
+        g.gain.value = 0.18;
+        o.connect(f); f.connect(g); g.connect(audioCtx.destination);
+        o.start(t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.09);
+        o.stop(t + 0.11);
+      } else if (type === 'explode') {
+        const noise = audioCtx.createBufferSource();
+        const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.7, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        noise.buffer = buffer;
+        const g = audioCtx.createGain();
+        const f = audioCtx.createBiquadFilter();
+        f.type = 'lowpass'; f.frequency.value = 620;
+        g.gain.value = 0.7;
+        const o = audioCtx.createOscillator(); o.type = 'sine'; o.frequency.value = 110;
+        const g2 = audioCtx.createGain(); g2.gain.value = 0.5;
+        noise.connect(f); f.connect(g); g.connect(audioCtx.destination);
+        o.connect(g2); g2.connect(audioCtx.destination);
+        noise.start(t); o.start(t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.65);
+        g2.gain.linearRampToValueAtTime(0.0001, t + 0.55);
+        noise.stop(t + 0.7); o.stop(t + 0.7);
+      } else if (type === 'rescue') {
+        [880, 1180, 1560].forEach((freq, i) => {
+          const o = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          o.type = 'sine'; o.frequency.value = freq;
+          g.gain.value = 0.12;
+          o.connect(g); g.connect(audioCtx.destination);
+          o.start(t + i * 0.06);
+          g.gain.linearRampToValueAtTime(0.0001, t + 0.22 + i * 0.06);
+          o.stop(t + 0.28 + i * 0.06);
+        });
+      } else if (type === 'thrust') {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        const f = audioCtx.createBiquadFilter();
+        o.type = 'sine'; o.frequency.value = 68;
+        f.type = 'lowpass'; f.frequency.value = 210;
+        g.gain.value = 0.045;
+        o.connect(f); f.connect(g); g.connect(audioCtx.destination);
+        o.start(t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.18);
+        o.stop(t + 0.2);
+      } else if (type === 'shield') {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = 'sine'; o.frequency.value = 420;
+        g.gain.value = 0.09;
+        const f = audioCtx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900;
+        o.connect(f); f.connect(g); g.connect(audioCtx.destination);
+        o.start(t); g.gain.linearRampToValueAtTime(0.0001, t + 0.45);
+        o.stop(t + 0.5);
+      } else if (type === 'bomb') {
+        const o = audioCtx.createOscillator(); o.type='sawtooth'; o.frequency.value = 140;
+        const g = audioCtx.createGain(); g.gain.value = 0.65;
+        const f = audioCtx.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 520;
+        o.connect(f); f.connect(g); g.connect(audioCtx.destination);
+        o.start(t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.9);
+        o.stop(t + 0.95);
+      } else if (type === 'hit') {
+        const o = audioCtx.createOscillator(); o.type = 'square'; o.frequency.value = 160;
+        const g = audioCtx.createGain(); g.gain.value = 0.22;
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.12);
+        o.stop(t + 0.14);
+      }
+    } catch (e) {}
+  }
+
   addEventListener('keydown', e => {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'b', 'B'].includes(e.key)) e.preventDefault();
     keys[e.key] = true;
-    if (e.key.startsWith('Arrow')) mouse.active = false; // keys take over from mouse
+    if (e.key.startsWith('Arrow')) mouse.active = false;
     if (e.key === 'Enter' && gameOver) restart();
+    if ((e.key === 'b' || e.key === 'B') && !gameOver) {
+      ensureAudio();
+      trySmartBomb();
+    }
   });
   addEventListener('keyup', e => { keys[e.key] = false; });
 
@@ -180,6 +324,7 @@
     mouse.active = true;
   });
   canvas.addEventListener('mousedown', e => {
+    ensureAudio();
     if (e.button === 2) tryShield();
     else mouse.down = true;
   });
@@ -199,13 +344,151 @@
     }
     particles = particles.filter(p => p.life > 0);
 
-    // --- enemies (landers drift + bob) ---
+    if (shake > 0) shake = Math.max(0, shake - dt * 24);
+
+    // --- floating score popups ---
+    for (const p of scorePopups) {
+      p.y += p.vy * dt;
+      p.life -= dt;
+    }
+    scorePopups = scorePopups.filter(p => p.life > 0);
+
+    // --- humans (falling physics + rescue catches) ---
+    for (const h of humans) {
+      if (!h.alive || !h.falling) continue;
+      h.y += h.vy * dt;
+      const ground = terrainY(h.x) - 2;
+      if (h.y >= ground) {
+        // splat
+        h.alive = false;
+        h.falling = false;
+        sparks(h.x, ground + 2);
+        playSound('hit');
+        setTimeout(() => {
+          if (!gameOver) {
+            const idx = humans.indexOf(h);
+            if (idx !== -1) humans[idx] = spawnHuman();
+          }
+        }, 1500);
+      } else {
+        tryCatchHuman(h);
+      }
+    }
+
+    // --- enemies: landers now abduct, baiters hunt, both can shoot ---
     for (const en of enemies) {
       if (!en.alive) continue;
-      en.phase += dt;
-      en.x = wrap(en.x + en.vx * dt);
-      en.y = en.baseY + Math.sin(en.phase * 1.5) * 24;
+
+      if (en.type === 'baiter') {
+        // fast aggressive homing
+        const dx = wrapDelta(ship.x, en.x);
+        const dy = ship.y - en.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const tvx = (dx / dist) * BAITER_SPEED * (dist > 80 ? 1 : 1.55);
+        const tvy = (dy / dist) * BAITER_SPEED * 0.82;
+        en.vx += (tvx - en.vx) * 4.2 * dt;
+        en.vy += (tvy - en.vy) * 4.2 * dt;
+        const sp = Math.hypot(en.vx, en.vy);
+        if (sp > BAITER_SPEED * 1.55) { const k = BAITER_SPEED * 1.55 / sp; en.vx *= k; en.vy *= k; }
+        en.x = wrap(en.x + en.vx * dt);
+        en.y += en.vy * dt;
+        en.y = Math.max(RADAR_Y + RADAR_H + 26, Math.min(en.y, CH - 125));
+      } else {
+        // lander
+        en.phase += dt;
+        if (en.carrying) {
+          en.vx *= 0.95;
+          en.vy = -72;
+          en.x = wrap(en.x + en.vx * dt);
+          en.y += en.vy * dt;
+          if (en.y < RADAR_Y + RADAR_H + 36) {
+            // abducted and escaped!
+            if (en.carrying && en.carrying.alive) en.carrying.alive = false;
+            en.carrying = null;
+            en.alive = false;
+            setTimeout(() => {
+              const idx = enemies.indexOf(en);
+              if (idx !== -1 && !gameOver) enemies[idx] = spawnBaiter(true);
+            }, 850);
+            continue;
+          }
+        } else {
+          // seek humans
+          let target = null, best = 255;
+          for (const h of humans) {
+            if (!h.alive || h.falling) continue;
+            const d = Math.abs(wrapDelta(en.x, h.x));
+            if (d < best && Math.abs(en.y - h.y) < 155) { best = d; target = h; }
+          }
+          if (target) {
+            const dx = wrapDelta(target.x, en.x);
+            en.vx = en.vx * 0.88 + Math.sign(-dx) * 55 * dt;
+            en.vx = Math.max(-64, Math.min(64, en.vx));
+            en.vy = (en.y > target.y + 4) ? 38 : -14;
+            en.y += en.vy * dt;
+          } else {
+            en.vx *= 0.982;
+            en.x = wrap(en.x + en.vx * dt);
+            en.y = en.baseY + Math.sin(en.phase * 1.5) * 23;
+          }
+          // grab attempt
+          if (!en.carrying) {
+            for (const h of humans) {
+              if (!h.alive || h.falling) continue;
+              if (Math.abs(wrapDelta(en.x, h.x)) < LANDER_GRAB_R &&
+                  Math.abs(en.y - h.y) < LANDER_GRAB_R + 8) {
+                en.carrying = h;
+                h.alive = false;
+                h.falling = false;
+                ensureAudio(); playSound('hit');
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // shooting (both types)
+      if (en.shootTimer !== undefined) {
+        en.shootTimer -= dt;
+        if (en.shootTimer <= 0) {
+          const dx = wrapDelta(ship.x, en.x);
+          const dy = ship.y - en.y;
+          const dist = Math.hypot(dx, dy);
+          const range = en.type === 'baiter' ? 440 : 295;
+          if (dist < range && Math.abs(dx) < CW * 0.5) {
+            const spd = en.type === 'baiter' ? 265 : 185;
+            enemyShots.push({
+              x: en.x, y: en.y + 2,
+              vx: (dx / (dist || 1)) * spd,
+              vy: (dy / (dist || 1)) * spd * (en.type === 'baiter' ? 0.68 : 1.0),
+              life: en.type === 'baiter' ? 1.7 : 1.2
+            });
+            en.shootTimer = en.type === 'baiter' ? rand(0.7, 1.55) : rand(1.55, 3.0);
+            particles.push({ x: en.x + Math.sign(dx)*4, y: en.y, vx: 0, vy: 0, life: 0.1, max: 0.1, color: '#3f3' });
+          } else {
+            en.shootTimer = 0.55;
+          }
+        }
+      }
     }
+
+    // enemy shots movement + player hits
+    for (const s of enemyShots) {
+      s.x = wrap(s.x + s.vx * dt);
+      s.y += s.vy * dt;
+      s.life -= dt;
+      if (!gameOver && !shield.active && ship.invuln <= 0) {
+        if (Math.abs(wrapDelta(ship.x, s.x)) < 12 && Math.abs(ship.y - s.y) < 10) {
+          s.life = 0;
+          ship.hull -= 17;
+          sparks(ship.x, ship.y);
+          playSound('hit');
+          if (ship.hull <= 0) { die(); }
+        }
+      }
+    }
+    enemyShots = enemyShots.filter(s => s.life > 0);
 
     if (gameOver) return;
 
@@ -227,13 +510,21 @@
     if (keys['ArrowDown'])  ay += ACCEL;
 
     if (ax === 0 && ay === 0 && mouse.active) {
-      // mouse steering: thrust proportional to offset from screen center / ship height
       ax = Math.max(-1, Math.min(1, (mouse.x - CW / 2) / (CW * 0.25))) * ACCEL;
       ay = Math.max(-1, Math.min(1, (mouse.y - ship.y) / 120)) * ACCEL;
     }
 
+    const wasThrusting = ship.thrusting;
     ship.thrusting = ax !== 0 || ay !== 0;
     if (ax !== 0) ship.facing = ax > 0 ? 1 : -1;
+
+    // cheap thrust audio pulse
+    if (ship.thrusting && !wasThrusting) { ensureAudio(); /* subtle start */ }
+    // thrust pulse
+    if (ship.thrusting && Math.random() < 0.18) {
+      ensureAudio();
+      playSound('thrust'); // will be ignored if no 'thrust' case, harmless
+    }
 
     ship.vx += ax * dt;
     ship.vy += ay * dt;
@@ -254,9 +545,9 @@
       const speed = Math.hypot(ship.vx, ship.vy);
       if (speed > CRASH_SPEED) {
         if (!shield.active && ship.invuln <= 0) { die(); return; }
-        ship.vy = -Math.abs(ship.vy) * 0.5;   // shield: bounce off the rocks
+        ship.vy = -Math.abs(ship.vy) * 0.5;
       } else {
-        ship.vy = Math.min(0, ship.vy);       // gentle contact: slide along
+        ship.vy = Math.min(0, ship.vy);
       }
       ship.y = floor;
     }
@@ -271,62 +562,86 @@
         dir: ship.facing,
         traveled: 0
       });
+      ensureAudio();
+      playSound('laser');
     }
 
-    // --- lasers ---
+    // --- lasers (improved collision + carrying drop + variety scoring) ---
     for (const l of lasers) {
       const step = LASER_SPEED * dt;
       const oldX = l.x;
       l.x = wrap(l.x + l.dir * step);
       l.traveled += step;
 
-      // collision: enemy within the segment swept this frame (plus beam length)
       for (const en of enemies) {
         if (!en.alive) continue;
-        if (Math.abs(en.y - l.y) > 14) continue;
-        const d = wrapDelta(oldX, en.x) * l.dir; // distance ahead of old head pos
-        if (d > -LASER_LEN && d < step + 10) {
+        if (Math.abs(en.y - l.y) > 15) continue;
+        const d = wrapDelta(oldX, en.x) * l.dir;
+        if (d > -LASER_LEN && d < step + 11) {
           en.alive = false;
-          l.traveled = 1e9; // kill laser
-          score += 150;
+          l.traveled = 1e9;
+          const pts = (en.type === 'baiter') ? 230 : 155;
+          score += pts;
+          createScorePopup(en.x, en.y - 16, pts);
           explode(en.x, en.y);
+          playSound('explode');
+          triggerShake(en.type === 'baiter' ? 5.5 : 2.8);
+          if (en.carrying) {
+            dropHuman(en.carrying, en.x, en.y + 5, true);
+            en.carrying = null;
+          }
           setTimeout(() => {
             const idx = enemies.indexOf(en);
-            if (idx !== -1) {
-              enemies[idx] = spawnEnemy(true);
-              enemies[idx].baseY = enemies[idx].y;
+            if (idx !== -1 && !gameOver) {
+              let nextE = spawnEnemy(true);
+              if (score > baiterNextScore && Math.random() < 0.7) {
+                nextE = spawnBaiter(true);
+                baiterNextScore += 2050;
+              }
+              enemies[idx] = nextE;
+              if (enemies[idx].baseY === undefined) enemies[idx].baseY = enemies[idx].y;
             }
-          }, 1500);
+          }, 1350);
         }
       }
     }
     lasers = lasers.filter(l => l.traveled < CW * 0.9);
 
-    // --- extra life every 10000 pts ---
+    // --- extra life + wave / difficulty ramp ---
     if (score >= nextLifeScore) {
       lives++;
       nextLifeScore += EXTRA_LIFE_EVERY;
       flash = { text: 'EXTRA LIFE', t: 2 };
+      if (smartBombs < 4) smartBombs++;
+    }
+    // wave progression
+    const targetWave = Math.min(12, 1 + Math.floor(score / 4300));
+    if (targetWave > wave) {
+      wave = targetWave;
+      flash = { text: 'WAVE ' + wave, t: 1.4 };
+      if (Math.random() < 0.75 && smartBombs < 5) smartBombs++;
+    }
+    // ensure some baiters exist at high score
+    if (score > baiterNextScore) {
+      const activeBaiters = enemies.filter(e => e.alive && e.type === 'baiter').length;
+      if (activeBaiters < 2) {
+        enemies.push(spawnBaiter(true));
+        baiterNextScore += 1850;
+      }
     }
 
-    // --- enemy contact: slow hull damage ---
+    // --- enemy contact damage ---
     if (!shield.active && ship.invuln <= 0) {
       for (const en of enemies) {
         if (!en.alive) continue;
         if (Math.abs(en.y - ship.y) < ENEMY_HIT_R &&
             Math.abs(wrapDelta(ship.x, en.x)) < ENEMY_HIT_R) {
-          ship.hull -= ENEMY_DPS * dt;
-          if (Math.random() < 0.4) sparks(ship.x, ship.y);
+          const dps = (en.type === 'baiter' ? ENEMY_DPS * 1.75 : ENEMY_DPS);
+          ship.hull -= dps * dt;
+          if (Math.random() < (en.type === 'baiter' ? 0.7 : 0.38)) sparks(ship.x, ship.y);
           if (ship.hull <= 0) { die(); return; }
         }
       }
-    }
-  }
-
-  function tryShield() {
-    if (!shield.active && shield.cooldown <= 0 && !gameOver) {
-      shield.active = true;
-      shield.timer = SHIELD_TIME;
     }
   }
 
@@ -334,13 +649,20 @@
     explode(ship.x, ship.y);
     explode(ship.x, ship.y);
     lives--;
-    if (lives <= 0) { gameOver = true; return; }
+    if (lives <= 0) {
+      if (score > highScore) {
+        highScore = score;
+        try { localStorage.setItem('spaceDefenderHi', String(highScore)); } catch(e){}
+      }
+      gameOver = true; return;
+    }
     ship.y = CH / 2;
     ship.vx = ship.vy = 0;
     ship.hull = 100;
     ship.invuln = RESPAWN_INVULN;
     shield.active = false; shield.timer = 0; shield.cooldown = 0;
     lasers = [];
+    enemyShots = [];
   }
 
   function restart() {
@@ -356,9 +678,18 @@
     shield.active = false; shield.timer = 0; shield.cooldown = 0;
     lasers = [];
     particles = [];
+    scorePopups = [];
+    enemyShots = [];
+    smartBombs = SMART_BOMBS_START;
+    wave = 1;
+    humansRescued = 0;
+    shake = 0;
+    baiterNextScore = BAITER_SCORE_THRESHOLD;
     enemies = [];
     for (let i = 0; i < ENEMY_COUNT; i++) enemies.push(spawnEnemy(false));
-    enemies.forEach(e => e.baseY = e.y);
+    enemies.forEach(e => { e.baseY = e.y; e.carrying = null; });
+    humans = [];
+    for (let i = 0; i < NUM_HUMANS; i++) humans.push(spawnHuman());
   }
 
   function sparks(x, y) {
@@ -375,18 +706,113 @@
     }
   }
 
-  function explode(x, y) {
-    for (let i = 0; i < 18; i++) {
-      const a = rand(0, Math.PI * 2), s = rand(60, 320);
+  function explode(x, y, big = false) {
+    const count = big ? 36 : 18;
+    const speed = big ? 420 : 320;
+    for (let i = 0; i < count; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(50, speed);
       particles.push({
         x, y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s,
-        life: rand(0.3, 0.8),
-        max: 0.8,
+        life: rand(big ? 0.35 : 0.3, big ? 1.05 : 0.8),
+        max: big ? 1.0 : 0.8,
         color: Math.random() < 0.5 ? '#f0f' : '#ff0'
       });
     }
+    if (big) {
+      // extra ring flash particles
+      for (let i = 0; i < 14; i++) {
+        const a = rand(0, Math.PI * 2), s = rand(180, 260);
+        particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, life: 0.55, max: 0.55, color: '#aef' });
+      }
+    }
+  }
+
+  function createScorePopup(x, y, pts) {
+    scorePopups.push({ x, y, text: '+' + pts, life: 1.1, vy: -38 });
+  }
+
+  function triggerShake(amount) {
+    shake = Math.max(shake, amount);
+  }
+
+  function tryShield() {
+    if (!shield.active && shield.cooldown <= 0 && !gameOver) {
+      shield.active = true;
+      shield.timer = SHIELD_TIME;
+      ensureAudio();
+      playSound('shield');
+    }
+  }
+
+  function trySmartBomb() {
+    if (smartBombs <= 0 || gameOver) return;
+    smartBombs--;
+    ensureAudio();
+    playSound('bomb');
+    triggerShake(9);
+    explode(ship.x, ship.y, true);
+    // kill all enemies within radius (screen relative + wrapped check)
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      const dx = Math.abs(wrapDelta(ship.x, en.x));
+      const dy = Math.abs(en.y - ship.y);
+      if (dx < SMART_BOMB_R * 1.1 && dy < SMART_BOMB_R * 0.75) {
+        en.alive = false;
+        score += 90;
+        createScorePopup(en.x, en.y - 18, 90);
+        // if carrying, drop the human too (but don't count as rescue)
+        if (en.carrying) {
+          dropHuman(en.carrying, en.x, en.y + 6, false);
+          en.carrying = null;
+        }
+        setTimeout(() => {
+          const idx = enemies.indexOf(en);
+          if (idx !== -1) {
+            const isBaiter = Math.random() < 0.35 && score > BAITER_SCORE_THRESHOLD * 0.8;
+            enemies[idx] = isBaiter ? spawnBaiter(true) : spawnEnemy(true);
+          }
+        }, 1200);
+      }
+    }
+    flash = { text: 'SMART BOMB', t: 1.1 };
+  }
+
+  function dropHuman(h, x, y, wasKilled = false) {
+    if (!h) return;
+    h.alive = true;
+    h.falling = true;
+    h.x = wrap(x);
+    h.y = y;
+    h.vy = FALL_SPEED * (wasKilled ? 0.6 : 1.0);
+  }
+
+  function tryCatchHuman(h) {
+    if (!h || !h.falling || gameOver) return false;
+    const dx = Math.abs(wrapDelta(ship.x, h.x));
+    const dy = Math.abs(ship.y - h.y);
+    if (dx < 22 && dy < 26) {
+      // caught!
+      h.alive = false;
+      h.falling = false;
+      humansRescued++;
+      score += RESCUE_SCORE;
+      createScorePopup(h.x, h.y - 22, RESCUE_SCORE);
+      flash = { text: 'HUMAN RESCUED', t: 1.6 };
+      ensureAudio();
+      playSound('rescue');
+      triggerShake(4);
+      // respawn a fresh human later
+      setTimeout(() => {
+        if (!gameOver) {
+          const idx = humans.indexOf(h);
+          if (idx !== -1) humans[idx] = spawnHuman();
+        }
+      }, 2200);
+      return true;
+    }
+    return false;
   }
 
   // ---------- DRAW ----------
@@ -397,10 +823,14 @@
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, CW, CH);
 
+    ctx.save();
+    if (shake > 0.5) {
+      ctx.translate((Math.random() - 0.5) * shake * 0.9, (Math.random() - 0.5) * shake * 0.65);
+    }
+
     // stars (parallax)
     ctx.save();
     for (const s of stars) {
-      // parallax: star world-x shifts slower than the camera
       const px = CW / 2 + wrapDelta(ship.x * s.depth, s.x);
       if (px < -5 || px > CW + 5) continue;
       ctx.fillStyle = `rgba(255,255,255,${s.b * 0.8})`;
@@ -409,12 +839,17 @@
     ctx.restore();
 
     drawTerrain();
+    drawHumans();
+    drawEnemyShots();
     drawLasers();
     drawEnemies();
     drawParticles();
     drawShip();
     drawRadar();
+    drawScorePopups();
     drawHUD();
+
+    ctx.restore();
   }
 
   function drawTerrain() {
@@ -509,27 +944,67 @@
       if (!en.alive) continue;
       const sx = toScreenX(en.x);
       if (sx < -30 || sx > CW + 30) continue;
-      ctx.strokeStyle = '#0f0';
-      ctx.shadowColor = '#0f0';
-      // lander: dome + legs
-      ctx.beginPath();
-      ctx.moveTo(sx - 10, en.y);
-      ctx.lineTo(sx - 6, en.y - 8);
-      ctx.lineTo(sx + 6, en.y - 8);
-      ctx.lineTo(sx + 10, en.y);
-      ctx.closePath();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(sx - 8, en.y);
-      ctx.lineTo(sx - 11, en.y + 7);
-      ctx.moveTo(sx + 8, en.y);
-      ctx.lineTo(sx + 11, en.y + 7);
-      ctx.moveTo(sx, en.y);
-      ctx.lineTo(sx, en.y + 7);
-      ctx.stroke();
-      // eye
-      ctx.fillStyle = '#ff0';
-      ctx.fillRect(sx - 2, en.y - 6, 4, 3);
+
+      if (en.type === 'baiter') {
+        // small aggressive red dart
+        ctx.strokeStyle = '#f33';
+        ctx.shadowColor = '#f33';
+        ctx.beginPath();
+        ctx.moveTo(sx + 7, en.y);
+        ctx.lineTo(sx - 5, en.y - 5);
+        ctx.lineTo(sx - 5, en.y + 5);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = '#f33';
+        ctx.fillRect(sx - 1, en.y - 1, 3, 2);
+        // wing accents
+        ctx.strokeStyle = '#faa';
+        ctx.beginPath();
+        ctx.moveTo(sx - 2, en.y - 3);
+        ctx.lineTo(sx + 2, en.y - 6);
+        ctx.moveTo(sx - 2, en.y + 3);
+        ctx.lineTo(sx + 2, en.y + 6);
+        ctx.stroke();
+      } else {
+        // lander (green)
+        ctx.strokeStyle = en.carrying ? '#fb0' : '#0f0';
+        ctx.shadowColor = en.carrying ? '#fb0' : '#0f0';
+        // dome + legs
+        ctx.beginPath();
+        ctx.moveTo(sx - 10, en.y);
+        ctx.lineTo(sx - 6, en.y - 8);
+        ctx.lineTo(sx + 6, en.y - 8);
+        ctx.lineTo(sx + 10, en.y);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(sx - 8, en.y);
+        ctx.lineTo(sx - 11, en.y + 7);
+        ctx.moveTo(sx + 8, en.y);
+        ctx.lineTo(sx + 11, en.y + 7);
+        ctx.moveTo(sx, en.y);
+        ctx.lineTo(sx, en.y + 7);
+        ctx.stroke();
+        // eye
+        ctx.fillStyle = en.carrying ? '#ff0' : '#ff0';
+        ctx.fillRect(sx - 2, en.y - 6, 4, 3);
+
+        // carried human silhouette under lander
+        if (en.carrying) {
+          ctx.strokeStyle = '#ff0';
+          ctx.shadowColor = '#ff0';
+          ctx.lineWidth = 1.5;
+          const hy = en.y + 11;
+          ctx.beginPath();
+          ctx.moveTo(sx, hy - 4);
+          ctx.lineTo(sx, hy + 3);
+          ctx.moveTo(sx - 2, hy);
+          ctx.lineTo(sx + 2, hy);
+          ctx.stroke();
+          ctx.fillStyle = '#ff0';
+          ctx.fillRect(sx - 1, hy - 5, 2, 2);
+        }
+      }
     }
     ctx.restore();
   }
@@ -547,6 +1022,85 @@
       ctx.moveTo(sx, p.y);
       ctx.lineTo(sx - p.vx * 0.03, p.y - p.vy * 0.03);
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawHumans() {
+    ctx.save();
+    ctx.shadowBlur = 4;
+    for (const h of humans) {
+      if (!h.alive) continue;
+      const sx = toScreenX(h.x);
+      if (sx < -12 || sx > CW + 12) continue;
+      if (h.falling) {
+        // falling human (flailing)
+        ctx.strokeStyle = '#ff0';
+        ctx.shadowColor = '#ff0';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, h.y - 5);
+        ctx.lineTo(sx, h.y + 3);
+        ctx.moveTo(sx - 3, h.y - 1);
+        ctx.lineTo(sx + 3, h.y - 1);
+        ctx.stroke();
+        // little legs kicking
+        ctx.beginPath();
+        ctx.moveTo(sx - 2, h.y + 3);
+        ctx.lineTo(sx - 4, h.y + 7);
+        ctx.moveTo(sx + 2, h.y + 3);
+        ctx.lineTo(sx + 4, h.y + 7);
+        ctx.stroke();
+      } else {
+        // standing person on terrain
+        ctx.strokeStyle = '#0af';
+        ctx.shadowColor = '#0af';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, h.y - 5);
+        ctx.lineTo(sx, h.y + 2);
+        ctx.moveTo(sx, h.y - 2);
+        ctx.lineTo(sx - 3, h.y + 1);
+        ctx.moveTo(sx, h.y - 2);
+        ctx.lineTo(sx + 3, h.y + 1);
+        ctx.stroke();
+        // head
+        ctx.fillStyle = '#0af';
+        ctx.fillRect(sx - 1.5, h.y - 7, 3, 3);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawEnemyShots() {
+    ctx.save();
+    ctx.shadowBlur = 8;
+    for (const s of enemyShots) {
+      const sx = toScreenX(s.x);
+      if (sx < -6 || sx > CW + 6) continue;
+      ctx.fillStyle = '#f33';
+      ctx.shadowColor = '#f33';
+      ctx.fillRect(sx - 1, s.y - 1, 2.5, 2.5);
+      // faint trail
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = '#a22';
+      ctx.fillRect(sx - s.vx * 0.018 - 1, s.y - s.vy * 0.018 - 1, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+
+  function drawScorePopups() {
+    ctx.save();
+    ctx.font = '9px "Press Start 2P", monospace';
+    ctx.textAlign = 'center';
+    for (const p of scorePopups) {
+      const sx = toScreenX(p.x);
+      ctx.globalAlpha = Math.min(1, p.life * 1.1);
+      ctx.fillStyle = '#ff0';
+      ctx.shadowColor = '#ff0';
+      ctx.shadowBlur = 4;
+      ctx.fillText(p.text, sx, p.y);
     }
     ctx.restore();
   }
@@ -584,10 +1138,17 @@
     if (vx + vw > RADAR_X + RADAR_W)
       ctx.strokeRect(vx - RADAR_W, RADAR_Y + 2, vw, RADAR_H - 4);
 
-    // enemies
-    ctx.fillStyle = '#0f0';
+    // humans on radar (cyan)
+    ctx.fillStyle = '#0cf';
+    for (const h of humans) {
+      if (!h.alive) continue;
+      ctx.fillRect(mapX(h.x) - 1, mapY(h.y) - 1, 2, 2);
+    }
+
+    // enemies (green = lander, red = baiter)
     for (const en of enemies) {
       if (!en.alive) continue;
+      ctx.fillStyle = (en.type === 'baiter') ? '#f33' : '#0f0';
       ctx.fillRect(mapX(en.x) - 1.5, mapY(en.y) - 1.5, 3, 3);
     }
 
@@ -606,10 +1167,18 @@
     ctx.shadowColor = '#0ff';
     ctx.shadowBlur = 8;
     ctx.fillText(String(score).padStart(6, '0'), 24, 36);
+    if (highScore > 0) {
+      ctx.font = '8px "Press Start 2P", monospace';
+      ctx.fillStyle = '#888';
+      ctx.shadowColor = '#444';
+      ctx.shadowBlur = 2;
+      ctx.fillText('HI ' + String(highScore).padStart(6, '0'), CW - 140, 36);
+      ctx.shadowBlur = 8;
+    }
     ctx.font = '8px "Press Start 2P", monospace';
     ctx.fillStyle = '#f0f';
     ctx.shadowColor = '#f0f';
-    ctx.fillText('SECTOR 1', 24, 56);
+    ctx.fillText('WAVE ' + wave, 24, 56);
 
     // lives (small ship glyphs)
     ctx.strokeStyle = '#fff';
@@ -626,6 +1195,19 @@
       ctx.closePath();
       ctx.stroke();
     }
+
+    // humans remaining (left side)
+    const aliveHumans = humans.filter(h => h.alive && !h.falling).length;
+    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.fillStyle = '#0cf';
+    ctx.shadowColor = '#0cf';
+    ctx.shadowBlur = 4;
+    ctx.fillText('HUMANS ' + aliveHumans.toString().padStart(2, '0'), 24, 90);
+
+    // smart bombs (right of lives area)
+    ctx.fillStyle = '#fa0';
+    ctx.shadowColor = '#fa0';
+    ctx.fillText('BOMB ' + smartBombs, 160, 90);
 
     // hull + shield bars (right of radar)
     const bx = RADAR_X + RADAR_W + 24, bw = 150;
@@ -670,12 +1252,27 @@
       ctx.shadowColor = '#f00';
       ctx.shadowBlur = 20;
       ctx.fillText('GAME OVER', CW / 2, CH / 2 - 20);
+
+      ctx.font = '11px "Press Start 2P", monospace';
+      ctx.fillStyle = '#0ff';
+      ctx.shadowColor = '#0ff';
+      ctx.shadowBlur = 6;
+      ctx.fillText('SCORE ' + String(score).padStart(6, '0'), CW / 2, CH / 2 + 6);
+      if (score === highScore && score > 0) {
+        ctx.fillStyle = '#ff0';
+        ctx.shadowColor = '#ff0';
+        ctx.fillText('NEW HIGH SCORE!', CW / 2, CH / 2 + 18);
+        ctx.fillStyle = '#0ff';
+        ctx.shadowColor = '#0ff';
+      }
+      ctx.fillText('RESCUED ' + humansRescued + '   WAVE ' + wave, CW / 2, CH / 2 + 36);
+
       if (Math.floor(performance.now() / 400) % 2 === 0) {
         ctx.font = '12px "Press Start 2P", monospace';
         ctx.fillStyle = '#0ff';
         ctx.shadowColor = '#0ff';
         ctx.shadowBlur = 10;
-        ctx.fillText('PRESS ENTER TO PLAY AGAIN', CW / 2, CH / 2 + 24);
+        ctx.fillText('PRESS ENTER TO PLAY AGAIN', CW / 2, CH / 2 + 62);
       }
       ctx.textAlign = 'left';
     }
