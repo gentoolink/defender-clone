@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Space Defender</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  .arcade-font { font-family: 'Press Start 2P', monospace; }
+  /* CRT scanline overlay */
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.18) 3px,
+      rgba(0, 0, 0, 0) 4px
+    );
+    border-radius: inherit;
+  }
+  .crt-glow { box-shadow: inset 0 0 80px rgba(0, 255, 200, 0.06), 0 0 30px rgba(0, 0, 0, 0.9); }
+</style>
+</head>
+<body class="bg-zinc-950 min-h-screen flex items-center justify-center p-4 select-none">
+
+  <!-- ARCADE CABINET BEZEL -->
+  <div class="bg-gradient-to-b from-zinc-800 via-zinc-900 to-zinc-800 rounded-3xl p-6 shadow-2xl border border-zinc-700 max-w-fit">
+
+    <!-- Marquee -->
+    <div class="text-center mb-4">
+      <h1 class="arcade-font text-3xl text-cyan-400 tracking-widest"
+          style="text-shadow: 0 0 10px #22d3ee, 0 0 30px #22d3ee, 0 0 60px #0ea5e9;">
+        SPACE DEFENDER
+      </h1>
+      <p class="arcade-font text-[8px] text-fuchsia-400 mt-2 tracking-widest"
+         style="text-shadow: 0 0 8px #e879f9;">GENTOOLINK AMUSEMENTS &copy; 2026</p>
+    </div>
+
+    <!-- Screen -->
+    <div class="relative rounded-xl overflow-hidden border-4 border-zinc-950 crt-glow scanlines bg-black">
+      <canvas id="game" width="960" height="600" class="block"></canvas>
+    </div>
+
+    <!-- Control panel -->
+    <div class="mt-4 flex items-center justify-between px-2">
+      <div class="arcade-font text-[8px] text-zinc-400 leading-relaxed">
+        <span class="text-amber-400">ARROWS</span> / <span class="text-amber-400">MOUSE</span> — THRUST<br>
+        <span class="text-amber-400">SPACE</span> / <span class="text-amber-400">CLICK</span> — FIRE<br>
+        <span class="text-amber-400">SHIFT</span> / <span class="text-amber-400">R-CLICK</span> — SHIELD
+      </div>
+      <div class="flex gap-3 items-center">
+        <div class="w-4 h-4 rounded-full bg-red-600 shadow-[0_0_8px_#dc2626] border-2 border-red-900"></div>
+        <div class="w-4 h-4 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24] border-2 border-amber-700"></div>
+        <div class="arcade-font text-[8px] text-zinc-500">1 CREDIT</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- CONSTANTS ----------
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const CW = canvas.width;        // 960
+  const CH = canvas.height;       // 600
+  const WORLD_W = 3000;           // virtual world width, wraps seamlessly
+
+  const ACCEL = 1100;             // thrust px/s^2
+  const DRAG = 1.6;               // exponential damping
+  const MAX_V = 520;
+  const FIRE_COOLDOWN = 0.09;     // rapid fire interval (s)
+  const LASER_SPEED = 1400;
+  const LASER_LEN = 70;
+  const ENEMY_COUNT = 8;
+
+  const CRASH_SPEED = 300;        // hitting terrain faster than this is fatal
+  const ENEMY_DPS = 40;           // hull damage per second of enemy contact
+  const ENEMY_HIT_R = 22;         // enemy contact radius
+  const SHIELD_TIME = 3;          // shield burst duration (s)
+  const SHIELD_COOLDOWN = 6;      // recharge before next burst (s)
+  const START_LIVES = 3;
+  const EXTRA_LIFE_EVERY = 10000;
+  const RESPAWN_INVULN = 2.5;     // post-respawn grace period (s)
+
+  // Radar box (centered top)
+  const RADAR_W = 360, RADAR_H = 64;
+  const RADAR_X = (CW - RADAR_W) / 2, RADAR_Y = 8;
+
+  // ---------- HELPERS ----------
+  const wrap = x => ((x % WORLD_W) + WORLD_W) % WORLD_W;
+  // shortest signed distance from a to b in wrapped world: result in [-W/2, W/2)
+  const wrapDelta = (a, b) => {
+    let d = wrap(b) - wrap(a);
+    if (d < -WORLD_W / 2) d += WORLD_W;
+    if (d >= WORLD_W / 2) d -= WORLD_W;
+    return d;
+  };
+  const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+
+  // ---------- TERRAIN (sum of sines => loops perfectly at WORLD_W) ----------
+  function terrainY(x) {
+    const t = (wrap(x) / WORLD_W) * Math.PI * 2;
+    return CH - 90
+      - 38 * Math.sin(t * 3)
+      - 26 * Math.sin(t * 7 + 1.7)
+      - 16 * Math.sin(t * 13 + 0.6)
+      - 9  * Math.sin(t * 23 + 3.1);
+  }
+
+  // ---------- STARS (parallax background, fixed world positions) ----------
+  const stars = Array.from({ length: 90 }, () => ({
+    x: rand(0, WORLD_W),
+    y: rand(20, CH - 140),
+    depth: rand(0.25, 0.7),       // parallax factor
+    b: rand(0.3, 1)               // brightness
+  }));
+
+  // ---------- STATE ----------
+  const ship = {
+    x: 0, y: CH / 2,
+    vx: 0, vy: 0,
+    facing: 1,                    // 1 = right, -1 = left
+    thrusting: false,
+    hull: 100,
+    invuln: 0                     // respawn grace timer
+  };
+
+  const shield = { active: false, timer: 0, cooldown: 0 };
+  let lives = START_LIVES;
+  let nextLifeScore = EXTRA_LIFE_EVERY;
+  let gameOver = false;
+  let flash = null;               // { text, t } center-screen announcement
+
+  const keys = {};
+  const mouse = { x: CW / 2, y: CH / 2, active: false, down: false };
+  let lasers = [];
+  let enemies = [];
+  let particles = [];
+  let score = 0;
+  let fireTimer = 0;
+
+  function spawnEnemy(awayFromShip) {
+    let x = rand(0, WORLD_W);
+    if (awayFromShip) {
+      // keep new spawns off-screen
+      while (Math.abs(wrapDelta(ship.x, x)) < CW * 0.6) x = rand(0, WORLD_W);
+    }
+    return {
+      x,
+      y: rand(60 + RADAR_H, CH - 180),
+      baseY: 0,
+      vx: rand(-40, 40),
+      phase: rand(0, Math.PI * 2),
+      alive: true
+    };
+  }
+  for (let i = 0; i < ENEMY_COUNT; i++) enemies.push(spawnEnemy(false));
+  enemies.forEach(e => e.baseY = e.y);
+
+  // ---------- INPUT ----------
+  addEventListener('keydown', e => {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+    keys[e.key] = true;
+    if (e.key.startsWith('Arrow')) mouse.active = false; // keys take over from mouse
+    if (e.key === 'Enter' && gameOver) restart();
+  });
+  addEventListener('keyup', e => { keys[e.key] = false; });
+
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - r.left) * (CW / r.width);
+    mouse.y = (e.clientY - r.top) * (CH / r.height);
+    mouse.active = true;
+  });
+  canvas.addEventListener('mousedown', e => {
+    if (e.button === 2) tryShield();
+    else mouse.down = true;
+  });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('mouseup', () => { mouse.down = false; });
+  canvas.addEventListener('mouseleave', () => { mouse.active = false; mouse.down = false; });
+
+  // ---------- UPDATE ----------
+  function update(dt) {
+    if (flash) { flash.t -= dt; if (flash.t <= 0) flash = null; }
+
+    // --- particles (run even on game over so death debris settles) ---
+    for (const p of particles) {
+      p.x = wrap(p.x + p.vx * dt);
+      p.y += p.vy * dt;
+      p.life -= dt;
+    }
+    particles = particles.filter(p => p.life > 0);
+
+    // --- enemies (landers drift + bob) ---
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      en.phase += dt;
+      en.x = wrap(en.x + en.vx * dt);
+      en.y = en.baseY + Math.sin(en.phase * 1.5) * 24;
+    }
+
+    if (gameOver) return;
+
+    // --- shield + respawn grace timers ---
+    ship.invuln = Math.max(0, ship.invuln - dt);
+    shield.cooldown = Math.max(0, shield.cooldown - dt);
+    if (shield.active) {
+      shield.timer -= dt;
+      if (shield.timer <= 0) { shield.active = false; shield.cooldown = SHIELD_COOLDOWN; }
+    } else if (keys['Shift']) {
+      tryShield();
+    }
+
+    // --- thrust ---
+    let ax = 0, ay = 0;
+    if (keys['ArrowLeft'])  ax -= ACCEL;
+    if (keys['ArrowRight']) ax += ACCEL;
+    if (keys['ArrowUp'])    ay -= ACCEL;
+    if (keys['ArrowDown'])  ay += ACCEL;
+
+    if (ax === 0 && ay === 0 && mouse.active) {
+      // mouse steering: thrust proportional to offset from screen center / ship height
+      ax = Math.max(-1, Math.min(1, (mouse.x - CW / 2) / (CW * 0.25))) * ACCEL;
+      ay = Math.max(-1, Math.min(1, (mouse.y - ship.y) / 120)) * ACCEL;
+    }
+
+    ship.thrusting = ax !== 0 || ay !== 0;
+    if (ax !== 0) ship.facing = ax > 0 ? 1 : -1;
+
+    ship.vx += ax * dt;
+    ship.vy += ay * dt;
+    const damp = Math.exp(-DRAG * dt);
+    ship.vx *= damp;
+    ship.vy *= damp;
+    const sp = Math.hypot(ship.vx, ship.vy);
+    if (sp > MAX_V) { ship.vx *= MAX_V / sp; ship.vy *= MAX_V / sp; }
+
+    ship.x = wrap(ship.x + ship.vx * dt);
+    ship.y += ship.vy * dt;
+
+    // vertical bounds: below radar, above terrain
+    const floor = terrainY(ship.x) - 16;
+    const ceil = RADAR_Y + RADAR_H + 24;
+    if (ship.y < ceil) { ship.y = ceil; ship.vy = Math.max(0, ship.vy); }
+    if (ship.y > floor) {
+      const speed = Math.hypot(ship.vx, ship.vy);
+      if (speed > CRASH_SPEED) {
+        if (!shield.active && ship.invuln <= 0) { die(); return; }
+        ship.vy = -Math.abs(ship.vy) * 0.5;   // shield: bounce off the rocks
+      } else {
+        ship.vy = Math.min(0, ship.vy);       // gentle contact: slide along
+      }
+      ship.y = floor;
+    }
+
+    // --- firing ---
+    fireTimer -= dt;
+    if ((keys[' '] || mouse.down) && fireTimer <= 0) {
+      fireTimer = FIRE_COOLDOWN;
+      lasers.push({
+        x: wrap(ship.x + ship.facing * 22),
+        y: ship.y,
+        dir: ship.facing,
+        traveled: 0
+      });
+    }
+
+    // --- lasers ---
+    for (const l of lasers) {
+      const step = LASER_SPEED * dt;
+      const oldX = l.x;
+      l.x = wrap(l.x + l.dir * step);
+      l.traveled += step;
+
+      // collision: enemy within the segment swept this frame (plus beam length)
+      for (const en of enemies) {
+        if (!en.alive) continue;
+        if (Math.abs(en.y - l.y) > 14) continue;
+        const d = wrapDelta(oldX, en.x) * l.dir; // distance ahead of old head pos
+        if (d > -LASER_LEN && d < step + 10) {
+          en.alive = false;
+          l.traveled = 1e9; // kill laser
+          score += 150;
+          explode(en.x, en.y);
+          setTimeout(() => {
+            const idx = enemies.indexOf(en);
+            if (idx !== -1) {
+              enemies[idx] = spawnEnemy(true);
+              enemies[idx].baseY = enemies[idx].y;
+            }
+          }, 1500);
+        }
+      }
+    }
+    lasers = lasers.filter(l => l.traveled < CW * 0.9);
+
+    // --- extra life every 10000 pts ---
+    if (score >= nextLifeScore) {
+      lives++;
+      nextLifeScore += EXTRA_LIFE_EVERY;
+      flash = { text: 'EXTRA LIFE', t: 2 };
+    }
+
+    // --- enemy contact: slow hull damage ---
+    if (!shield.active && ship.invuln <= 0) {
+      for (const en of enemies) {
+        if (!en.alive) continue;
+        if (Math.abs(en.y - ship.y) < ENEMY_HIT_R &&
+            Math.abs(wrapDelta(ship.x, en.x)) < ENEMY_HIT_R) {
+          ship.hull -= ENEMY_DPS * dt;
+          if (Math.random() < 0.4) sparks(ship.x, ship.y);
+          if (ship.hull <= 0) { die(); return; }
+        }
+      }
+    }
+  }
+
+  function tryShield() {
+    if (!shield.active && shield.cooldown <= 0 && !gameOver) {
+      shield.active = true;
+      shield.timer = SHIELD_TIME;
+    }
+  }
+
+  function die() {
+    explode(ship.x, ship.y);
+    explode(ship.x, ship.y);
+    lives--;
+    if (lives <= 0) { gameOver = true; return; }
+    ship.y = CH / 2;
+    ship.vx = ship.vy = 0;
+    ship.hull = 100;
+    ship.invuln = RESPAWN_INVULN;
+    shield.active = false; shield.timer = 0; shield.cooldown = 0;
+    lasers = [];
+  }
+
+  function restart() {
+    score = 0;
+    lives = START_LIVES;
+    nextLifeScore = EXTRA_LIFE_EVERY;
+    gameOver = false;
+    flash = null;
+    ship.x = 0; ship.y = CH / 2;
+    ship.vx = ship.vy = 0;
+    ship.hull = 100;
+    ship.invuln = RESPAWN_INVULN;
+    shield.active = false; shield.timer = 0; shield.cooldown = 0;
+    lasers = [];
+    particles = [];
+    enemies = [];
+    for (let i = 0; i < ENEMY_COUNT; i++) enemies.push(spawnEnemy(false));
+    enemies.forEach(e => e.baseY = e.y);
+  }
+
+  function sparks(x, y) {
+    for (let i = 0; i < 3; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(40, 140);
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: rand(0.15, 0.35),
+        max: 0.35,
+        color: '#f80'
+      });
+    }
+  }
+
+  function explode(x, y) {
+    for (let i = 0; i < 18; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(60, 320);
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: rand(0.3, 0.8),
+        max: 0.8,
+        color: Math.random() < 0.5 ? '#f0f' : '#ff0'
+      });
+    }
+  }
+
+  // ---------- DRAW ----------
+  // world -> screen: ship is locked at horizontal center
+  const toScreenX = wx => CW / 2 + wrapDelta(ship.x, wx);
+
+  function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, CH);
+
+    // stars (parallax)
+    ctx.save();
+    for (const s of stars) {
+      // parallax: star world-x shifts slower than the camera
+      const px = CW / 2 + wrapDelta(ship.x * s.depth, s.x);
+      if (px < -5 || px > CW + 5) continue;
+      ctx.fillStyle = `rgba(255,255,255,${s.b * 0.8})`;
+      ctx.fillRect(px, s.y, s.b > 0.8 ? 2 : 1, s.b > 0.8 ? 2 : 1);
+    }
+    ctx.restore();
+
+    drawTerrain();
+    drawLasers();
+    drawEnemies();
+    drawParticles();
+    drawShip();
+    drawRadar();
+    drawHUD();
+  }
+
+  function drawTerrain() {
+    ctx.save();
+    ctx.strokeStyle = '#a855f7';
+    ctx.shadowColor = '#a855f7';
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const camLeft = ship.x - CW / 2;
+    for (let sx = 0; sx <= CW; sx += 8) {
+      const y = terrainY(camLeft + sx);
+      sx === 0 ? ctx.moveTo(sx, y) : ctx.lineTo(sx, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawShip() {
+    if (gameOver) return;
+    // blink during respawn grace period
+    if (ship.invuln > 0 && Math.floor(performance.now() / 100) % 2 === 1) return;
+    ctx.save();
+    ctx.translate(CW / 2, ship.y);
+    ctx.scale(ship.facing, 1);
+    // shield bubble
+    if (shield.active) {
+      ctx.strokeStyle = `rgba(0,255,255,${0.55 + 0.3 * Math.sin(performance.now() / 60)})`;
+      ctx.shadowColor = '#0ff';
+      ctx.shadowBlur = 16;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(2, 0, 34, 22, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = '#fff';
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 2;
+    // hull
+    ctx.beginPath();
+    ctx.moveTo(20, 0);
+    ctx.lineTo(-14, -8);
+    ctx.lineTo(-10, 0);
+    ctx.lineTo(-14, 8);
+    ctx.closePath();
+    ctx.stroke();
+    // cockpit stripe
+    ctx.strokeStyle = '#0ff';
+    ctx.beginPath();
+    ctx.moveTo(12, 0);
+    ctx.lineTo(-6, 0);
+    ctx.stroke();
+    // thruster flame
+    if (ship.thrusting) {
+      ctx.strokeStyle = Math.random() < 0.5 ? '#f80' : '#ff0';
+      ctx.shadowColor = '#f80';
+      ctx.beginPath();
+      ctx.moveTo(-14, -4);
+      ctx.lineTo(-22 - Math.random() * 12, 0);
+      ctx.lineTo(-14, 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawLasers() {
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 10;
+    for (const l of lasers) {
+      const hx = toScreenX(l.x);
+      const tail = hx - l.dir * Math.min(LASER_LEN, l.traveled);
+      const g = ctx.createLinearGradient(tail, 0, hx, 0);
+      g.addColorStop(0, 'rgba(255,0,255,0)');
+      g.addColorStop(1, '#fff');
+      ctx.strokeStyle = g;
+      ctx.shadowColor = '#f0f';
+      ctx.beginPath();
+      ctx.moveTo(tail, l.y);
+      ctx.lineTo(hx, l.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawEnemies() {
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 10;
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      const sx = toScreenX(en.x);
+      if (sx < -30 || sx > CW + 30) continue;
+      ctx.strokeStyle = '#0f0';
+      ctx.shadowColor = '#0f0';
+      // lander: dome + legs
+      ctx.beginPath();
+      ctx.moveTo(sx - 10, en.y);
+      ctx.lineTo(sx - 6, en.y - 8);
+      ctx.lineTo(sx + 6, en.y - 8);
+      ctx.lineTo(sx + 10, en.y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx - 8, en.y);
+      ctx.lineTo(sx - 11, en.y + 7);
+      ctx.moveTo(sx + 8, en.y);
+      ctx.lineTo(sx + 11, en.y + 7);
+      ctx.moveTo(sx, en.y);
+      ctx.lineTo(sx, en.y + 7);
+      ctx.stroke();
+      // eye
+      ctx.fillStyle = '#ff0';
+      ctx.fillRect(sx - 2, en.y - 6, 4, 3);
+    }
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    ctx.save();
+    for (const p of particles) {
+      const sx = toScreenX(p.x);
+      if (sx < -10 || sx > CW + 10) continue;
+      ctx.globalAlpha = p.life / p.max;
+      ctx.strokeStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.moveTo(sx, p.y);
+      ctx.lineTo(sx - p.vx * 0.03, p.y - p.vy * 0.03);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawRadar() {
+    ctx.save();
+    // box
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(RADAR_X, RADAR_Y, RADAR_W, RADAR_H);
+    ctx.strokeStyle = '#0ff';
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(RADAR_X, RADAR_Y, RADAR_W, RADAR_H);
+    ctx.shadowBlur = 0;
+
+    const mapX = wx => RADAR_X + (wrap(wx) / WORLD_W) * RADAR_W;
+    const mapY = wy => RADAR_Y + 6 + (wy / CH) * (RADAR_H - 12);
+
+    // terrain
+    ctx.strokeStyle = 'rgba(168,85,247,0.7)';
+    ctx.beginPath();
+    for (let i = 0; i <= 100; i++) {
+      const wx = (i / 100) * WORLD_W;
+      const x = RADAR_X + (i / 100) * RADAR_W;
+      i === 0 ? ctx.moveTo(x, mapY(terrainY(wx))) : ctx.lineTo(x, mapY(terrainY(wx)));
+    }
+    ctx.stroke();
+
+    // viewport bracket (may straddle the wrap seam)
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    const vw = (CW / WORLD_W) * RADAR_W;
+    let vx = mapX(ship.x - CW / 2);
+    ctx.strokeRect(vx, RADAR_Y + 2, vw, RADAR_H - 4);
+    if (vx + vw > RADAR_X + RADAR_W)
+      ctx.strokeRect(vx - RADAR_W, RADAR_Y + 2, vw, RADAR_H - 4);
+
+    // enemies
+    ctx.fillStyle = '#0f0';
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      ctx.fillRect(mapX(en.x) - 1.5, mapY(en.y) - 1.5, 3, 3);
+    }
+
+    // player (blinking white)
+    if (!gameOver && Math.floor(performance.now() / 150) % 2 === 0) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(mapX(ship.x) - 2, mapY(ship.y) - 2, 4, 4);
+    }
+    ctx.restore();
+  }
+
+  function drawHUD() {
+    ctx.save();
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.fillStyle = '#0ff';
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 8;
+    ctx.fillText(String(score).padStart(6, '0'), 24, 36);
+    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.fillStyle = '#f0f';
+    ctx.shadowColor = '#f0f';
+    ctx.fillText('SECTOR 1', 24, 56);
+
+    // lives (small ship glyphs)
+    ctx.strokeStyle = '#fff';
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < lives; i++) {
+      const lx = 24 + i * 22, ly = 72;
+      ctx.beginPath();
+      ctx.moveTo(lx + 12, ly);
+      ctx.lineTo(lx, ly - 4);
+      ctx.lineTo(lx + 2, ly);
+      ctx.lineTo(lx, ly + 4);
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // hull + shield bars (right of radar)
+    const bx = RADAR_X + RADAR_W + 24, bw = 150;
+    ctx.shadowBlur = 0;
+    ctx.font = '8px "Press Start 2P", monospace';
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillText('HULL', bx, 22);
+    ctx.strokeStyle = '#3f3f46';
+    ctx.strokeRect(bx, 28, bw, 10);
+    const hullFrac = Math.max(0, ship.hull) / 100;
+    ctx.fillStyle = hullFrac > 0.5 ? '#0f0' : hullFrac > 0.25 ? '#ff0' : '#f00';
+    ctx.fillRect(bx + 1, 29, (bw - 2) * hullFrac, 8);
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillText('SHIELD', bx, 56);
+    ctx.strokeStyle = '#3f3f46';
+    ctx.strokeRect(bx, 62, bw, 10);
+    let sFrac, sCol;
+    if (shield.active)            { sFrac = shield.timer / SHIELD_TIME; sCol = '#0ff'; }
+    else if (shield.cooldown > 0) { sFrac = 1 - shield.cooldown / SHIELD_COOLDOWN; sCol = '#066'; }
+    else                          { sFrac = 1; sCol = '#0ff'; }
+    ctx.fillStyle = sCol;
+    ctx.fillRect(bx + 1, 63, (bw - 2) * sFrac, 8);
+
+    // center-screen announcement (e.g. EXTRA LIFE)
+    if (flash) {
+      ctx.textAlign = 'center';
+      ctx.font = '16px "Press Start 2P", monospace';
+      ctx.fillStyle = '#ff0';
+      ctx.shadowColor = '#ff0';
+      ctx.shadowBlur = 12;
+      ctx.fillText(flash.text, CW / 2, CH / 2 - 80);
+      ctx.textAlign = 'left';
+    }
+
+    // game over
+    if (gameOver) {
+      ctx.textAlign = 'center';
+      ctx.font = '32px "Press Start 2P", monospace';
+      ctx.fillStyle = '#f00';
+      ctx.shadowColor = '#f00';
+      ctx.shadowBlur = 20;
+      ctx.fillText('GAME OVER', CW / 2, CH / 2 - 20);
+      if (Math.floor(performance.now() / 400) % 2 === 0) {
+        ctx.font = '12px "Press Start 2P", monospace';
+        ctx.fillStyle = '#0ff';
+        ctx.shadowColor = '#0ff';
+        ctx.shadowBlur = 10;
+        ctx.fillText('PRESS ENTER TO PLAY AGAIN', CW / 2, CH / 2 + 24);
+      }
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
+  // ---------- MAIN LOOP ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.05); // clamp to avoid tab-switch jumps
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
