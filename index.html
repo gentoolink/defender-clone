@@ -55,6 +55,8 @@
         <span class="text-amber-400">B</span> — SMART BOMB
       </div>
       <div class="flex gap-3 items-center">
+        <a href="instructions.html" target="_blank"
+           class="arcade-font text-[8px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 tracking-widest">HOW TO PLAY</a>
         <div class="w-4 h-4 rounded-full bg-red-600 shadow-[0_0_8px_#dc2626] border-2 border-red-900"></div>
         <div class="w-4 h-4 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24] border-2 border-amber-700"></div>
         <div class="arcade-font text-[8px] text-zinc-500">1 CREDIT</div>
@@ -313,6 +315,9 @@
     if ((e.key === 'b' || e.key === 'B') && !gameOver) {
       ensureAudio();
       trySmartBomb();
+    }
+    if ((e.key === '?' || e.key.toLowerCase() === 'h') && !gameOver) {
+      window.open('instructions.html', '_blank');
     }
   });
   addEventListener('keyup', e => { keys[e.key] = false; });

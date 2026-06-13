@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPACE DEFENDER — INSTRUCTIONS</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  .arcade-font { font-family: 'Press Start 2P', monospace; }
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.16) 3px,
+      rgba(0, 0, 0, 0) 4px
+    );
+    border-radius: inherit;
+  }
+  .crt-glow { box-shadow: inset 0 0 80px rgba(0, 255, 200, 0.05), 0 0 30px rgba(0, 0, 0, 0.9); }
+  .section { background: #18181b; border: 2px solid #27272a; }
+  .key { 
+    display: inline-block; 
+    background: #27272a; 
+    border: 2px solid #3f3f46; 
+    padding: 2px 10px; 
+    font-size: 11px; 
+    min-width: 42px;
+    text-align: center;
+    box-shadow: 0 2px 0 #111113;
+  }
+  .stat { font-family: 'Press Start 2P', monospace; }
+  .enemy-green { color: #22c55e; }
+  .enemy-red { color: #f87171; }
+  .accent-cyan { color: #67e8f9; }
+  .accent-fuchsia { color: #e879f9; }
+</style>
+</head>
+<body class="bg-zinc-950 text-zinc-200 min-h-screen p-4 md:p-8">
+  <div class="max-w-4xl mx-auto">
+
+    <!-- HEADER / MARQUEE -->
+    <div class="text-center mb-6">
+      <div class="inline-block bg-gradient-to-b from-zinc-800 via-zinc-900 to-zinc-800 rounded-3xl px-8 py-4 border border-zinc-700">
+        <h1 class="arcade-font text-3xl md:text-4xl text-cyan-400 tracking-[4px]"
+            style="text-shadow: 0 0 10px #22d3ee, 0 0 30px #22d3ee;">
+          SPACE DEFENDER
+        </h1>
+        <p class="arcade-font text-[9px] text-fuchsia-400 mt-1 tracking-[3px]">PLAYER INSTRUCTIONS • GENTOOLINK AMUSEMENTS 2026</p>
+      </div>
+    </div>
+
+    <!-- QUICK START -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="section rounded-2xl p-5 scanlines crt-glow">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+          <div class="arcade-font text-sm text-emerald-400 tracking-widest">MISSION BRIEFING</div>
+        </div>
+        <p class="text-lg leading-relaxed">
+          You are the last line of defense. Pilot your ship across a hostile alien world, 
+          destroy the invading forces, and <span class="text-amber-400">protect the human colonists</span>.
+        </p>
+        <p class="mt-3 text-zinc-400">
+          The world wraps horizontally. Watch your radar. Every human saved is a victory.
+        </p>
+        <div class="mt-4">
+          <a href="index.html" 
+             class="inline-block arcade-font text-xs bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 transition-colors text-white px-6 py-3 rounded border border-emerald-800 tracking-widest">
+            RETURN TO ARCADE CABINET →
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">CONTROLS</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Keyboard -->
+        <div class="section rounded-2xl p-5">
+          <div class="arcade-font text-[10px] text-zinc-400 mb-3 tracking-widest">KEYBOARD</div>
+          <div class="space-y-3 text-sm">
+            <div class="flex items-center justify-between">
+              <div><span class="key">←</span> <span class="key">→</span> <span class="key">↑</span> <span class="key">↓</span></div>
+              <div class="text-right text-zinc-300">Thrust / Fly</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">SPACE</span></div>
+              <div class="text-right text-zinc-300">Fire Laser</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">SHIFT</span></div>
+              <div class="text-right text-zinc-300">Activate Shield</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">B</span></div>
+              <div class="text-right text-zinc-300">Smart Bomb</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">ENTER</span></div>
+              <div class="text-right text-zinc-300">Restart (Game Over)</div>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-zinc-800 mt-1">
+              <div><span class="key">H</span> / <span class="key">?</span></div>
+              <div class="text-right text-zinc-300">Open these instructions</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mouse -->
+        <div class="section rounded-2xl p-5">
+          <div class="arcade-font text-[10px] text-zinc-400 mb-3 tracking-widest">MOUSE</div>
+          <div class="space-y-3 text-sm">
+            <div class="flex items-center justify-between">
+              <div><span class="key">MOVE</span></div>
+              <div class="text-right text-zinc-300">Direct Thrust</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">L-CLICK</span></div>
+              <div class="text-right text-zinc-300">Fire Laser</div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div><span class="key">R-CLICK</span></div>
+              <div class="text-right text-zinc-300">Activate Shield</div>
+            </div>
+          </div>
+          <div class="mt-4 text-[10px] text-zinc-500 leading-snug">
+            Mouse mode overrides arrow keys. Move the cursor away from the center of the screen to fly in that direction.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- THE ENEMIES -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">THE ENEMIES</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Landers -->
+        <div class="section rounded-2xl p-5 border-l-4 border-green-500">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="arcade-font text-sm enemy-green">LANDER</div>
+            <div class="text-[10px] px-2 py-px bg-zinc-800 rounded text-green-400">+155 PTS</div>
+          </div>
+          <ul class="text-sm text-zinc-300 space-y-1.5">
+            <li>• Slow-moving green ships that patrol the surface</li>
+            <li>• <span class="text-amber-400">Primary threat:</span> They grab humans and try to carry them off the top of the screen</li>
+            <li>• Both landers and baiters fire projectiles at your ship</li>
+            <li>• Shoot a lander while it's carrying a human to drop the hostage</li>
+            <li>• If a lander escapes upward with a human, that colonist is lost permanently</li>
+          </ul>
+        </div>
+
+        <!-- Baiters -->
+        <div class="section rounded-2xl p-5 border-l-4 border-red-500">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="arcade-font text-sm enemy-red">BAITER</div>
+            <div class="text-[10px] px-2 py-px bg-zinc-800 rounded text-red-400">+230 PTS</div>
+          </div>
+          <ul class="text-sm text-zinc-300 space-y-1.5">
+            <li>• Fast, aggressive red interceptors</li>
+            <li>• Appear once your score exceeds ~3500 and become more common on higher waves</li>
+            <li>• Home in on your ship and fire plasma bolts</li>
+            <li>• Extremely dangerous in groups — use your shield and smart bombs wisely</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- HUMANS & RESCUE -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">PROTECT THE HUMANS</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="section rounded-2xl p-5">
+        <p class="text-sm leading-relaxed">
+          There are <span class="stat text-cyan-400">10 humans</span> on the surface at the start of each game. 
+          They are marked in <span class="text-cyan-400">cyan</span> on the radar.
+        </p>
+        
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div>
+            <div class="font-bold text-amber-400 text-xs tracking-widest mb-1">WHEN A LANDER GRABS ONE</div>
+            <div class="text-zinc-300">The human is lifted upward. Shoot the lander to release them — they will fall toward the ground.</div>
+          </div>
+          <div>
+            <div class="font-bold text-emerald-400 text-xs tracking-widest mb-1">RESCUE (850 PTS)</div>
+            <div class="text-zinc-300">Position your ship to catch a falling human before they hit the ground. A successful rescue flashes <span class="text-emerald-400">"HUMAN RESCUED"</span> and awards massive points.</div>
+          </div>
+        </div>
+
+        <div class="mt-4 text-xs text-zinc-500 border-t border-zinc-800 pt-3">
+          Humans that hit the terrain are lost. Landers that reach the top of the screen with a captive permanently remove that human from the world.
+        </div>
+      </div>
+    </div>
+
+    <!-- YOUR ARSENAL -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">YOUR ARSENAL</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="space-y-4">
+        <!-- Laser -->
+        <div class="section rounded-2xl p-5 flex gap-4">
+          <div class="w-12 h-12 flex-shrink-0 rounded bg-zinc-900 border border-zinc-700 flex items-center justify-center">
+            <div class="w-6 h-px bg-white"></div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2">
+              <div class="arcade-font text-sm">LASER</div>
+              <div class="text-[10px] text-fuchsia-400">RAPID FIRE</div>
+            </div>
+            <div class="text-sm text-zinc-300">Your primary weapon. Fires in the direction your ship is facing. Excellent for destroying landers (especially ones carrying humans) so you can rescue their captives.</div>
+          </div>
+        </div>
+
+        <!-- Shield -->
+        <div class="section rounded-2xl p-5 flex gap-4">
+          <div class="w-12 h-12 flex-shrink-0 rounded bg-zinc-900 border border-cyan-900 flex items-center justify-center">
+            <div class="w-7 h-7 rounded-full border-2 border-cyan-400"></div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2">
+              <div class="arcade-font text-sm accent-cyan">SHIELD</div>
+              <div class="text-[10px] text-cyan-400">3 SEC BURST • 6 SEC COOLDOWN</div>
+            </div>
+            <div class="text-sm text-zinc-300">Temporary energy bubble that blocks all damage from enemies and enemy fire (both contact and projectiles). Lets you safely fly through swarms or tough spots. Press (or hold) SHIFT or right-click to activate.</div>
+          </div>
+        </div>
+
+        <!-- Smart Bomb -->
+        <div class="section rounded-2xl p-5 flex gap-4">
+          <div class="w-12 h-12 flex-shrink-0 rounded bg-zinc-900 border border-amber-900 flex items-center justify-center">
+            <div class="text-amber-400 arcade-font text-xs">B</div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2">
+              <div class="arcade-font text-sm text-amber-400">SMART BOMB</div>
+              <div class="text-[10px] text-amber-400">START WITH 3</div>
+            </div>
+            <div class="text-sm text-zinc-300">Detonates a massive blast centered on your ship. Destroys every enemy within a wide radius and drops any humans they were carrying (no rescue points awarded). Earn more bombs by reaching score milestones and advancing waves.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HUD & RADAR -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">HUD &amp; RADAR</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="section rounded-2xl p-5 text-sm">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+          <div>
+            <div class="arcade-font text-xs text-fuchsia-400 mb-1">TOP CENTER — RADAR</div>
+            <ul class="space-y-1 text-zinc-300">
+              <li><span class="text-cyan-400">• Cyan dots</span> — Humans</li>
+              <li><span class="text-green-400">• Green dots</span> — Landers</li>
+              <li><span class="text-red-400">• Red dots</span> — Baiters</li>
+              <li><span class="text-white/60">• White square</span> — Your position + viewport bracket</li>
+              <li><span class="text-purple-400">• Purple line</span> — Terrain outline</li>
+            </ul>
+          </div>
+          <div>
+            <div class="arcade-font text-xs text-fuchsia-400 mb-1">LEFT SIDE</div>
+            <ul class="space-y-1 text-zinc-300">
+              <li><span class="stat">SCORE</span> — Current points (leading zeros)</li>
+              <li><span class="stat">WAVE</span> — Current difficulty level</li>
+              <li><span class="stat">LIVES</span> — Remaining ships (small icons)</li>
+              <li><span class="stat text-cyan-400">HUMANS</span> — Remaining on surface</li>
+              <li><span class="stat text-amber-400">BOMB</span> — Smart bombs remaining</li>
+            </ul>
+          </div>
+          <div class="sm:col-span-2">
+            <div class="arcade-font text-xs text-fuchsia-400 mb-1">RIGHT OF RADAR</div>
+            <div class="text-zinc-300">HULL bar (green → yellow → red) and SHIELD charge/cooldown bar. Your ship starts with 100 hull points.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCORING -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">SCORING</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="section rounded-2xl p-5">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+          <div>
+            <div class="text-2xl font-bold text-green-400">155</div>
+            <div class="text-xs text-zinc-400">LANDER</div>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-red-400">230</div>
+            <div class="text-xs text-zinc-400">BAITER</div>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-amber-400">90</div>
+            <div class="text-xs text-zinc-400">SMART BOMB KILL</div>
+          </div>
+          <div>
+            <div class="text-2xl font-bold text-emerald-400">850</div>
+            <div class="text-xs text-zinc-400">HUMAN RESCUE</div>
+          </div>
+        </div>
+        <div class="mt-5 text-center text-xs text-zinc-500">
+          Extra life every <span class="text-white">10,000</span> points • Smart bombs awarded on milestones and wave-ups
+        </div>
+      </div>
+    </div>
+
+    <!-- TIPS -->
+    <div class="max-w-3xl mx-auto mb-8">
+      <div class="flex items-center gap-2 mb-3 px-1">
+        <div class="arcade-font text-xs text-amber-400 tracking-widest">SURVIVAL TIPS</div>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="section rounded-2xl p-5 text-sm">
+        <ul class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-zinc-300">
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Always watch the radar — landers can be far away grabbing people.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Prioritize landers carrying humans over everything else.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Rescue points (850) are the fastest way to earn extra lives and bombs.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Save smart bombs for dense groups or when you're overwhelmed by baiters.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Slow down near the ground. Crashing at high speed is fatal even with hull remaining.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> Use the shield aggressively when baiters are swarming — it has a short cooldown.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> The world is seamless. Enemies and humans loop around the edges.</li>
+          <li class="flex gap-2"><span class="text-amber-400 mt-1">▸</span> After dying you get a brief period of invulnerability — use it to reposition.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="text-center text-[10px] text-zinc-600 pb-8">
+      <div>DEFEND. RESCUE. SURVIVE.</div>
+      <div class="mt-1">High scores are saved locally in your browser.</div>
+      <div class="mt-4">
+        <a href="index.html" class="arcade-font text-xs underline hover:text-zinc-400">BACK TO THE GAME</a>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
